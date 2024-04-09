@@ -19,15 +19,14 @@ var targetAddress string
 var targetPort string
 var plusAddressing string
 
-func mailHandler(remoteAddr net.Addr, from string, to []string, data []byte) error {
+func mailHandler(_ net.Addr, from string, to []string, data []byte) error {
 	newSender := ""
+	var enveloppeTo []string
 	log.Printf("from: %s", from)
 	msg, _ := mail.ReadMessage(bytes.NewReader(data))
 	// loop through headers
 	for h, v := range msg.Header {
-		// log.Printf("header: %s", h)
 		for _, value := range v {
-			// log.Printf("\tvalue: %s", value)
 			if strings.Compare("received", strings.ToLower(h)) == 0 {
 				re := regexp.MustCompile(`Authenticated sender: ([^\)[:space:]]*)`)
 				sender := re.FindStringSubmatch(value)
@@ -38,7 +37,15 @@ func mailHandler(remoteAddr net.Addr, from string, to []string, data []byte) err
 					}
 				}
 			} else if strings.Compare("To", strings.ToLower(h)) == 0 {
-				
+				re := regexp.MustCompile(`^(.*)(` + plusAddressing + `)?@(.*)$`)
+				rcpt := re.FindStringSubmatch(value)
+				if rcpt != nil {
+					if len(rcpt) > 1 {
+						log.Printf("sender ==> %s", rcpt[1]+"@"+rcpt[3])
+						enveloppeTo = append(enveloppeTo, value)
+						value = rcpt[1] + "@" + rcpt[3]
+					}
+				}
 			}
 		}
 	}
@@ -47,24 +54,28 @@ func mailHandler(remoteAddr net.Addr, from string, to []string, data []byte) err
 		// overwrite From header
 		textproto.MIMEHeader(msg.Header).Set("From", newSender)
 		textproto.MIMEHeader(msg.Header).Set("X-Sender-From", from)
-		var mailContent string
-		for h, v := range msg.Header {
-			for _, value := range v {
-				mailContent += h + ": " + value + "\r\n"
-			}
-		}
-		log.Printf("%s", mailContent)
-		mailContent += "\r\n"
-		b, _ := io.ReadAll(msg.Body)
-		log.Printf("adding body: %q", b)
-		mailContent += string(b)
-		log.Printf("Trying to send mail: %s", mailContent)
-		return smtp.SendMail(targetAddress+":"+targetPort, nil, newSender, to, []byte(mailContent))
 	} else {
-		// send as is
-		log.Printf("mail sent as-is: %s => %s", from, to[0])
-		return smtp.SendMail(targetAddress+":"+targetPort, nil, from, to, data)
+		newSender = from
 	}
+	if len(enveloppeTo) > 0 {
+		textproto.MIMEHeader(msg.Header).Del("X-Enveloppe-To")
+		for _, r := range enveloppeTo {
+			textproto.MIMEHeader(msg.Header).Add("X-Enveloppe-To", r)
+		}
+	}
+	var mailContent string
+	for h, v := range msg.Header {
+		for _, value := range v {
+			mailContent += h + ": " + value + "\r\n"
+		}
+	}
+	log.Printf("%s", mailContent)
+	mailContent += "\r\n"
+	b, _ := io.ReadAll(msg.Body)
+	mailContent += string(b)
+	log.Printf("Trying to send mail to %s:%s, %s => %v", targetAddress, targetPort, newSender, to)
+	return smtp.SendMail(targetAddress+":"+targetPort, nil, newSender, to, []byte(mailContent))
+
 }
 
 func main() {
@@ -97,8 +108,12 @@ func main() {
 	if viper.IsSet("plus") {
 		plusAddressing = viper.GetString("plus")
 	}
-	fmt.Println("SMTP-GW from rewriter proxy")
+	fmt.Println("go-simple-smtp-rewriter proxy")
 	fmt.Printf("Listening on %s:%s\n", address, port)
 	fmt.Printf("Forwarding to %s:%s\n", targetAddress, targetPort)
-	smtpd.ListenAndServe(address+":"+port, mailHandler, "smtp-gw", "smtp-gw.b2n.fr")
+	err = smtpd.ListenAndServe(address+":"+port, mailHandler, "smtp-gw", "smtp-gw.b2n.fr")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 }

@@ -4,3 +4,5 @@ The original From header is keep into X-Sender-From header.
 It also change "+" addressing by removing "+" part into X-Enveloppe-To.
 
 This tool was created for mail archive processing, not for production.
+
+go-simple-smtp-rewritter by Nicolas B. is marked with CC0 1.0 
